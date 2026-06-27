@@ -1,0 +1,5 @@
+---
+security:
+  - |
+    Added root path containment checks when extracting image source file paths from document metadata. This prevents
+    relative paths from escaping the configured ``root_path`` before image or PDF files are loaded.

@@ -247,7 +247,17 @@ def _extract_image_sources_info(
                 f" Please ensure that the documents you are trying to convert have this key set."
             )
 
-        resolved_file_path = Path(root_path, file_path)
+        if root_path:
+            root_resolved_path = Path(root_path).resolve()
+            resolved_file_path = Path(root_resolved_path, file_path).resolve()
+            if not resolved_file_path.is_relative_to(root_resolved_path):
+                raise ValueError(
+                    f"Document with ID '{doc.id}' has a file path '{file_path}' that escapes the root path "
+                    f"'{root_resolved_path}'. Please ensure that file paths stay within the root path."
+                )
+        else:
+            resolved_file_path = Path(file_path)
+
         if not resolved_file_path.is_file():
             raise ValueError(
                 f"Document with ID '{doc.id}' has an invalid file path '{resolved_file_path}'. "

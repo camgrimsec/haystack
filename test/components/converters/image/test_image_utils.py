@@ -149,6 +149,19 @@ class TestExtractImageSourcesInfo:
         with pytest.raises(ValueError, match="missing the 'page_number' key"):
             _extract_image_sources_info(documents=[document], file_path_meta_field="file_path", root_path="")
 
+    def test_extract_image_source_info_rejects_paths_outside_root(self, tmp_path):
+        root_path = tmp_path / "root"
+        root_path.mkdir()
+        outside_file = tmp_path / "outside.png"
+        outside_file.touch()
+
+        document = Document(content="test", meta={"file_path": "../outside.png"})
+
+        with pytest.raises(ValueError, match="escapes the root path"):
+            _extract_image_sources_info(
+                documents=[document], file_path_meta_field="file_path", root_path=str(root_path)
+            )
+
 
 class TestBatchConvertPdfPagesToImages:
     @patch("haystack.components.converters.image.image_utils._convert_pdf_to_images")
