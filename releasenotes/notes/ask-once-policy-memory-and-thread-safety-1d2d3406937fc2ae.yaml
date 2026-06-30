@@ -1,0 +1,10 @@
+---
+fixes:
+  - |
+    Fixed two issues in ``haystack.human_in_the_loop.AskOncePolicy``. Previously the policy stored only the *most
+    recent* confirmed parameter set per ``tool_name``, so an agent that confirmed the same tool with two different
+    parameter sets and then re-issued the first one would re-prompt the user even though that call had already been
+    confirmed. The policy now remembers every confirmed (tool_name, parameter set) pair for the lifetime of the
+    instance. The policy is also now safe to share across threads — both ``should_ask`` and
+    ``update_after_confirmation`` take an internal lock so concurrent agent requests cannot interleave a confirmation
+    check with a confirmation update.

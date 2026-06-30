@@ -74,6 +74,76 @@ class TestAskOncePolicy:
         policy = AskOncePolicy.from_dict(policy_dict)
         assert isinstance(policy, AskOncePolicy)
 
+    def test_remembers_multiple_confirmed_param_sets(self, addition_tool):
+        # A previously confirmed parameter set must remain confirmed even after a different parameter set is
+        # confirmed for the same tool. Without this guarantee, an agent that re-issues a previously confirmed call
+        # after running other tool calls would re-prompt the user.
+        policy = AskOncePolicy()
+        params1 = {"x": 1, "y": 2}
+        params2 = {"x": 3, "y": 4}
+
+        policy.update_after_confirmation(
+            addition_tool.name,
+            addition_tool.description,
+            params1,
+            ConfirmationUIResult(action="confirm", feedback=None),
+        )
+        policy.update_after_confirmation(
+            addition_tool.name,
+            addition_tool.description,
+            params2,
+            ConfirmationUIResult(action="confirm", feedback=None),
+        )
+
+        assert policy.should_ask(addition_tool.name, addition_tool.description, params1) is False
+        assert policy.should_ask(addition_tool.name, addition_tool.description, params2) is False
+
+    def test_key_ordering_does_not_force_reprompt(self, addition_tool):
+        # The same parameters expressed with different key insertion orders represent the same call and must not
+        # cause a second prompt.
+        policy = AskOncePolicy()
+        policy.update_after_confirmation(
+            addition_tool.name,
+            addition_tool.description,
+            {"x": 1, "y": 2},
+            ConfirmationUIResult(action="confirm", feedback=None),
+        )
+        assert policy.should_ask(addition_tool.name, addition_tool.description, {"y": 2, "x": 1}) is False
+
+    def test_rejected_calls_do_not_silence_future_prompts(self, addition_tool):
+        # Rejecting a tool call must not cause future calls with the same parameters to skip the prompt.
+        policy = AskOncePolicy()
+        params = {"x": 1, "y": 2}
+        policy.update_after_confirmation(
+            addition_tool.name, addition_tool.description, params, ConfirmationUIResult(action="reject", feedback="no")
+        )
+        assert policy.should_ask(addition_tool.name, addition_tool.description, params) is True
+
+    def test_concurrent_updates_are_safe(self, addition_tool):
+        # The policy is documented as safe to share across threads (e.g. a FastAPI server hosting an agent).
+        # Run many concurrent updates and assert no confirmations are dropped.
+        import threading as _threading
+
+        policy = AskOncePolicy()
+        all_params = [{"x": i, "y": i + 1} for i in range(200)]
+
+        def worker(params):
+            policy.update_after_confirmation(
+                addition_tool.name,
+                addition_tool.description,
+                params,
+                ConfirmationUIResult(action="confirm", feedback=None),
+            )
+
+        threads = [_threading.Thread(target=worker, args=(p,)) for p in all_params]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        for params in all_params:
+            assert policy.should_ask(addition_tool.name, addition_tool.description, params) is False
+
 
 class TestNeverAskPolicy:
     def test_should_ask_always_false(self, addition_tool):
