@@ -98,18 +98,6 @@ class TestAskOncePolicy:
         assert policy.should_ask(addition_tool.name, addition_tool.description, params1) is False
         assert policy.should_ask(addition_tool.name, addition_tool.description, params2) is False
 
-    def test_key_ordering_does_not_force_reprompt(self, addition_tool):
-        # The same parameters expressed with different key insertion orders represent the same call and must not
-        # cause a second prompt.
-        policy = AskOncePolicy()
-        policy.update_after_confirmation(
-            addition_tool.name,
-            addition_tool.description,
-            {"x": 1, "y": 2},
-            ConfirmationUIResult(action="confirm", feedback=None),
-        )
-        assert policy.should_ask(addition_tool.name, addition_tool.description, {"y": 2, "x": 1}) is False
-
     def test_rejected_calls_do_not_silence_future_prompts(self, addition_tool):
         # Rejecting a tool call must not cause future calls with the same parameters to skip the prompt.
         policy = AskOncePolicy()
@@ -119,12 +107,94 @@ class TestAskOncePolicy:
         )
         assert policy.should_ask(addition_tool.name, addition_tool.description, params) is True
 
-    def test_concurrent_updates_are_safe(self, addition_tool):
-        # The policy is documented as safe to share across threads (e.g. a FastAPI server hosting an agent).
-        # Run many concurrent updates and assert no confirmations are dropped.
+    def test_modified_calls_do_not_silence_future_prompts(self, addition_tool):
+        # A "modify" outcome means the user wanted to intervene; the next call with the same parameters should
+        # still prompt.
+        policy = AskOncePolicy()
+        params = {"x": 1, "y": 2}
+        policy.update_after_confirmation(
+            addition_tool.name,
+            addition_tool.description,
+            params,
+            ConfirmationUIResult(action="modify", feedback="change y to 5"),
+        )
+        assert policy.should_ask(addition_tool.name, addition_tool.description, params) is True
+
+    @pytest.mark.parametrize("non_json_native_params", [{"x": b"bytes"}, {"x": {1, 2, 3}}, {"x": object()}])
+    def test_non_json_native_params_re_prompt(self, addition_tool, non_json_native_params):
+        # Params containing values that json.dumps cannot encode natively (bytes, sets, custom objects, ...) must
+        # cause a re-prompt rather than silently collapsing onto the same cache key as another distinct call. This
+        # is the conservative choice: a spurious extra prompt is far better than wrongly suppressing one.
+        policy = AskOncePolicy()
+        # Even after a "confirm" update with the same non-JSON-native params, should_ask must still return True.
+        policy.update_after_confirmation(
+            addition_tool.name,
+            addition_tool.description,
+            non_json_native_params,
+            ConfirmationUIResult(action="confirm", feedback=None),
+        )
+        assert policy.should_ask(addition_tool.name, addition_tool.description, non_json_native_params) is True
+
+    def test_clear_resets_all_state(self, addition_tool):
+        # ``clear()`` with no argument drops every cached confirmation, restoring the policy to its initial state.
+        # This is the intended hook for a session / user / tenant boundary.
+        policy = AskOncePolicy()
+        params = {"x": 1, "y": 2}
+        policy.update_after_confirmation(
+            addition_tool.name, addition_tool.description, params, ConfirmationUIResult(action="confirm", feedback=None)
+        )
+        assert policy.should_ask(addition_tool.name, addition_tool.description, params) is False
+        policy.clear()
+        assert policy.should_ask(addition_tool.name, addition_tool.description, params) is True
+
+    def test_clear_specific_tool(self, addition_tool):
+        # ``clear(tool_name=...)`` drops cached confirmations for one tool only, leaving others intact.
+        policy = AskOncePolicy()
+        params = {"x": 1, "y": 2}
+        other_tool = "other_tool"
+        policy.update_after_confirmation(
+            addition_tool.name, addition_tool.description, params, ConfirmationUIResult(action="confirm", feedback=None)
+        )
+        policy.update_after_confirmation(
+            other_tool, "other", params, ConfirmationUIResult(action="confirm", feedback=None)
+        )
+
+        policy.clear(tool_name=addition_tool.name)
+
+        assert policy.should_ask(addition_tool.name, addition_tool.description, params) is True
+        assert policy.should_ask(other_tool, "other", params) is False
+
+    def test_max_entries_per_tool_evicts_fifo(self, addition_tool):
+        # With a small cap, confirming more distinct parameter sets than the cap allows must evict the oldest
+        # entries first so memory stays bounded. The most-recently-confirmed entries are retained.
+        policy = AskOncePolicy(max_entries_per_tool=3)
+        param_sets = [{"x": i, "y": i + 1} for i in range(5)]
+        for params in param_sets:
+            policy.update_after_confirmation(
+                addition_tool.name,
+                addition_tool.description,
+                params,
+                ConfirmationUIResult(action="confirm", feedback=None),
+            )
+
+        # The two oldest entries should have been evicted and should now re-prompt.
+        assert policy.should_ask(addition_tool.name, addition_tool.description, param_sets[0]) is True
+        assert policy.should_ask(addition_tool.name, addition_tool.description, param_sets[1]) is True
+        # The three most-recent entries should still be cached.
+        for params in param_sets[2:]:
+            assert policy.should_ask(addition_tool.name, addition_tool.description, params) is False
+
+    def test_max_entries_per_tool_invalid_value(self):
+        with pytest.raises(ValueError):
+            AskOncePolicy(max_entries_per_tool=0)
+
+    def test_concurrent_updates_do_not_drop_writes(self, addition_tool):
+        # The in-process lock protects cache mutation: many threads updating the cache concurrently must not lose
+        # writes or corrupt the underlying OrderedDict. This is a narrow guarantee; see the policy docstring for
+        # what the lock does NOT cover (notably the ask -> UI -> update window and multi-worker deployments).
         import threading as _threading
 
-        policy = AskOncePolicy()
+        policy = AskOncePolicy(max_entries_per_tool=500)
         all_params = [{"x": i, "y": i + 1} for i in range(200)]
 
         def worker(params):

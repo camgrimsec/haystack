@@ -1,10 +1,19 @@
 ---
 fixes:
   - |
-    Fixed two issues in ``haystack.human_in_the_loop.AskOncePolicy``. Previously the policy stored only the *most
-    recent* confirmed parameter set per ``tool_name``, so an agent that confirmed the same tool with two different
-    parameter sets and then re-issued the first one would re-prompt the user even though that call had already been
-    confirmed. The policy now remembers every confirmed (tool_name, parameter set) pair for the lifetime of the
-    instance. The policy is also now safe to share across threads — both ``should_ask`` and
-    ``update_after_confirmation`` take an internal lock so concurrent agent requests cannot interleave a confirmation
-    check with a confirmation update.
+    Fixed a memory-loss bug in ``haystack.human_in_the_loop.AskOncePolicy``. The policy previously stored only the
+    *most recent* confirmed parameter set per ``tool_name``, so an agent that confirmed the same tool with two
+    different parameter sets and then re-issued the first one would re-prompt the user even though that call had
+    already been confirmed. The policy now remembers every confirmed ``(tool_name, parameter set)`` pair until it is
+    discarded or ``clear()`` is called.
+upgrade:
+  - |
+    ``AskOncePolicy`` now bounds its in-memory cache. The new ``max_entries_per_tool`` constructor argument
+    (default: 256) caps the number of confirmed parameter sets retained per tool; older entries are evicted FIFO once
+    the cap is reached. A new ``clear(tool_name=None)`` method drops cached confirmations and should be called at a
+    session / user / tenant boundary so a confirmation from one session cannot suppress a prompt in another. The
+    policy also now uses a process-local lock to make cache mutation safe under concurrent agent requests. The lock
+    protects only the internal cache; it does not make the ask → UI → update window atomic and does not synchronize
+    state across multiple worker processes (each process keeps its own cache). Parameter sets that are not
+    JSON-native (e.g. ``bytes``, sets, custom objects) now cause a re-prompt rather than being coerced via
+    ``str()``, which previously risked collapsing semantically distinct calls onto the same cache key.
