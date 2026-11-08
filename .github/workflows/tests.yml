@@ -26,9 +26,6 @@ on:
       - synchronize
 
 env:
-  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-  AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-  AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
   PYTHON_VERSION: "3.11"
   # numpy's stubs require a 3.12+ interpreter, so type checking runs above the floor.
   # See [tool.mypy] in pyproject.toml.
@@ -220,6 +217,10 @@ jobs:
     needs: unit-tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -247,6 +248,9 @@ jobs:
     timeout-minutes: 30
     env:
       HAYSTACK_MPS_ENABLED: false
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -281,6 +285,9 @@ jobs:
     timeout-minutes: 30
     env:
       HAYSTACK_XPU_ENABLED: false
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
