@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import time
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -82,6 +83,7 @@ _EXIT_REASON_TEXT = "text"
 _EXIT_REASON_LENGTH = "length"
 _EXIT_REASON_CONTENT_FILTER = "content_filter"
 _EXIT_REASON_MAX_STEPS = "max_agent_steps"
+_EXIT_REASON_MAX_TIME = "max_agent_time_seconds"
 
 # Run-metadata state keys the Agent populates automatically during a run. Users may not define them in their own
 # `state_schema`, and they are exposed as Agent outputs only (not inputs).
@@ -432,6 +434,7 @@ class Agent:
         exit_conditions: list[str] | None = None,
         state_schema: dict[str, Any] | None = None,
         max_agent_steps: int = 100,
+        max_agent_time_seconds: float | None = None,
         streaming_callback: StreamingCallbackT | None = None,
         raise_on_tool_invocation_failure: bool = False,
         tool_concurrency_limit: int = 4,
@@ -464,6 +467,10 @@ class Agent:
         :param max_agent_steps: Maximum number of steps the agent will run before stopping. Defaults to 100.
             A step is one chat-generator call plus the execution of every tool call the model requested in
             that call (if any). If the agent reaches this number of steps it stops and returns the current state.
+        :param max_agent_time_seconds: Optional maximum wall-clock runtime for one agent invocation, in seconds.
+            The limit is checked between steps, before each LLM call, so a currently running synchronous tool must
+            enforce its own timeout. On expiry the agent stops and returns the current state, with
+            `exit_reason` set to `"max_agent_time_seconds"`. Defaults to None (no time limit).
         :param streaming_callback: A callback that will be invoked when a response is streamed from the LLM.
             The same callback can be configured to emit tool results when a tool is called.
         :param raise_on_tool_invocation_failure: Should the agent raise an exception when a tool invocation fails?
@@ -529,6 +536,9 @@ class Agent:
         if tool_concurrency_limit < 1:
             raise ValueError("tool_concurrency_limit must be greater than or equal to 1.")
 
+        if max_agent_time_seconds is not None and max_agent_time_seconds <= 0:
+            raise ValueError("max_agent_time_seconds must be greater than zero when provided.")
+
         hooks = hooks or {}
         _validate_hooks(hooks)
 
@@ -542,6 +552,7 @@ class Agent:
         self.required_variables = required_variables
         self.exit_conditions = exit_conditions
         self.max_agent_steps = max_agent_steps
+        self.max_agent_time_seconds = max_agent_time_seconds
         self.raise_on_tool_invocation_failure = raise_on_tool_invocation_failure
         self.streaming_callback = streaming_callback
         self.tool_concurrency_limit = tool_concurrency_limit
@@ -704,6 +715,7 @@ class Agent:
             exit_conditions=self.exit_conditions,
             state_schema=_schema_to_dict(self.state_schema),
             max_agent_steps=self.max_agent_steps,
+            max_agent_time_seconds=self.max_agent_time_seconds,
             streaming_callback=serialize_callable(self.streaming_callback) if self.streaming_callback else None,
             raise_on_tool_invocation_failure=self.raise_on_tool_invocation_failure,
             tool_concurrency_limit=self.tool_concurrency_limit,
@@ -751,12 +763,24 @@ class Agent:
             "haystack.agent.run",
             tags={
                 "haystack.agent.max_steps": self.max_agent_steps,
+                "haystack.agent.max_time_seconds": self.max_agent_time_seconds,
                 "haystack.agent.tools": tools,
                 "haystack.agent.exit_conditions": self.exit_conditions,
                 "haystack.agent.state_schema": _schema_to_dict(self.resolved_state_schema),
             },
             parent_span=parent_span,
         )
+
+    def _is_time_limit_exceeded(self, deadline: float | None) -> bool:
+        """Check the optional wall-clock budget. Returns True when the deadline has passed."""
+        if deadline is None or time.monotonic() < deadline:
+            return False
+
+        logger.warning(
+            "Agent reached maximum execution time of {max_agent_time_seconds} seconds, stopping.",
+            max_agent_time_seconds=self.max_agent_time_seconds,
+        )
+        return True
 
     def _initialize_fresh_execution(
         self,
@@ -951,7 +975,13 @@ class Agent:
             _run_hooks(hooks=self.hooks, hook_point=BEFORE_RUN, state=exe_context.state)
             # A before_run hook can restore a saved State, so resume the execution counter from its step count.
             exe_context.counter = exe_context.state.data.get("step_count", 0)
+            deadline = (
+                time.monotonic() + self.max_agent_time_seconds if self.max_agent_time_seconds is not None else None
+            )
             while exe_context.counter < self.max_agent_steps:
+                if self._is_time_limit_exceeded(deadline):
+                    exe_context.state.set("exit_reason", _EXIT_REASON_MAX_TIME)
+                    break
                 if not self._run_step(exe_context=exe_context, agent_span=span):
                     break
             else:
@@ -1047,7 +1077,13 @@ class Agent:
             await _run_hooks_async(hooks=self.hooks, hook_point=BEFORE_RUN, state=exe_context.state)
             # A before_run hook can restore a saved State, so resume the execution counter from its step count.
             exe_context.counter = exe_context.state.data.get("step_count", 0)
+            deadline = (
+                time.monotonic() + self.max_agent_time_seconds if self.max_agent_time_seconds is not None else None
+            )
             while exe_context.counter < self.max_agent_steps:
+                if self._is_time_limit_exceeded(deadline):
+                    exe_context.state.set("exit_reason", _EXIT_REASON_MAX_TIME)
+                    break
                 if not await self._run_step_async(exe_context=exe_context, agent_span=span):
                     break
             else:

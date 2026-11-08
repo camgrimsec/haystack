@@ -399,6 +399,7 @@ class TestAgentSerialization:
                 "exit_conditions": ["text", "weather_tool"],
                 "state_schema": {"foo": {"type": "str"}},
                 "max_agent_steps": 100,
+                "max_agent_time_seconds": None,
                 "streaming_callback": None,
                 "raise_on_tool_invocation_failure": False,
                 "tool_concurrency_limit": 5,
@@ -1397,6 +1398,7 @@ class TestAgentTracing:
 
         assert run_span.tags == {
             "haystack.agent.max_steps": 100,
+            "haystack.agent.max_time_seconds": None,
             "haystack.agent.tools": [weather_tool],
             "haystack.agent.exit_conditions": ["text"],
             "haystack.agent.state_schema": {

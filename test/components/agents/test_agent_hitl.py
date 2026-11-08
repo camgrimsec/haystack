@@ -117,6 +117,7 @@ class TestAgent:
                 "exit_conditions": ["text"],
                 "state_schema": {},
                 "max_agent_steps": 100,
+                "max_agent_time_seconds": None,
                 "streaming_callback": None,
                 "raise_on_tool_invocation_failure": False,
                 "tool_concurrency_limit": 4,
